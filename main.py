@@ -42,7 +42,7 @@ TIP_IDS = [
 
 def play_alert():
     try:
-        playsound('alert.wav')
+        playsound('alert.mov')
     except Exception:
         pass
 
