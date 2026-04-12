@@ -1,195 +1,133 @@
-import collections
-import threading
-import time
-
+import streamlit as st
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 import cv2
 import mediapipe as mp
 import numpy as np
-from playsound import playsound
-import os
+import time
+import collections
 
-# Initialize MediaPipe
-mp_face_detection = mp.solutions.face_detection
-mp_hands = mp.solutions.hands
-mp_drawing = mp.solutions.drawing_utils
-
-# Initialize face detection
-face_detection = mp_face_detection.FaceDetection(min_detection_confidence=0.5)
-
-# Initialize hand detection
-hands = mp_hands.Hands(min_detection_confidence=0.5, min_tracking_confidence=0.5)
-
-# Open webcam
-cap = cv2.VideoCapture(0)
-
-if not cap.isOpened():
-    print("Cannot open camera")
-    exit()
-
-alert_cooldown = 5.0  # seconds
-last_alert = 0.0
-alert_until = 0.0
-
-finger_history = collections.deque(maxlen=180)
-continuous_touch_start = None
-
-TIP_IDS = [
-    mp_hands.HandLandmark.INDEX_FINGER_TIP,
-    mp_hands.HandLandmark.MIDDLE_FINGER_TIP,
-    mp_hands.HandLandmark.RING_FINGER_TIP,
-    mp_hands.HandLandmark.PINKY_TIP,
-]
-
-def load_alert_images():
-    img_files = ['first.png', 'second.png', 'third.png']
-    images = []
-    for f in img_files:
-        img = cv2.imread(f, cv2.IMREAD_UNCHANGED) # IMREAD_UNCHANGED to keep alpha channel
+# --- ASSET LOADING ---
+def load_assets():
+    files = ['first.png', 'second.png', 'third.png']
+    imgs = []
+    for f in files:
+        img = cv2.imread(f, cv2.IMREAD_UNCHANGED)
         if img is not None:
-            # Resize for visibility if they are very small pixel art
-            img = cv2.resize(img, (300, 300), interpolation=cv2.INTER_NEAREST)
-            images.append(img)
-    return images
+            # Resize for web visibility
+            img = cv2.resize(img, (250, 250), interpolation=cv2.INTER_NEAREST)
+            imgs.append(img)
+    return imgs
 
-alert_images = load_alert_images()
+ASSETS = load_assets()
 
-def overlay_image(background, overlay, x, y):
-    h, w = overlay.shape[:2]
-    if x + w > background.shape[1] or y + h > background.shape[0]:
-        return background
-    
-    # Split channels
-    if overlay.shape[2] == 4:
-        overlay_img = overlay[:, :, :3]
-        mask = overlay[:, :, 3:] / 255.0
-        background[y:y+h, x:x+w] = (1.0 - mask) * background[y:y+h, x:x+w] + mask * overlay_img
-    else:
-        background[y:y+h, x:x+w] = overlay
-    return background
+class TaiyakiGuardTransformer(VideoTransformerBase):
+    def __init__(self):
+        # Initialize MediaPipe
+        self.mp_face = mp.solutions.face_detection.FaceDetection(min_detection_confidence=0.5)
+        self.mp_hands = mp.solutions.hands.Hands(min_detection_confidence=0.5)
+        
+        # State tracking
+        self.finger_history = collections.deque(maxlen=180)
+        self.continuous_touch_start = None
+        self.alert_until = 0
+        self.TIP_IDS = [4, 8, 12, 16, 20] # Fingertips
 
-def play_alert():
-    try:
-        os.system('afplay alert.mov')
-    except Exception as e:
-        print(f"Audio error: {e}")
+    def is_active_motion(self, history, current_time):
+        recent = [e for e in history if current_time - e[0] <= 6.0]
+        if len(recent) < 16: return False
+        xs = np.array([p[1] for p in recent])
+        ys = np.array([p[2] for p in recent])
+        if np.ptp(xs) < 80 and np.ptp(ys) < 80: return False
+        dx, dy = np.diff(xs), np.diff(ys)
+        x_dir = np.sign(dx) * (np.abs(dx) > 10)
+        x_changes = np.sum((x_dir[1:] != x_dir[:-1]) & (x_dir[1:] != 0) & (x_dir[:-1] != 0))
+        return x_changes >= 3
 
-
-def threaded_alert():
-    threading.Thread(target=play_alert, daemon=True).start()
-
-
-def draw_alert_overlay(frame, text):
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (20, 20), (620, 100), (0, 0, 255), -1)
-    alpha = 0.7
-    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
-    cv2.putText(frame, text, (30, 75), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
-
-
-def is_active_back_and_forth(history):
-    if len(history) < 16:
-        return False
-
-    xs = np.array([p[1] for p in history], dtype=np.float32)
-    ys = np.array([p[2] for p in history], dtype=np.float32)
-
-    if np.ptp(xs) < 80 and np.ptp(ys) < 80:
-        return False
-
-    dx = np.diff(xs)
-    dy = np.diff(ys)
-    dx_mask = np.abs(dx) > 10
-    dy_mask = np.abs(dy) > 10
-    x_dir = np.sign(dx) * dx_mask
-    y_dir = np.sign(dy) * dy_mask
-
-    x_changes = np.sum((x_dir[1:] != x_dir[:-1]) & (x_dir[1:] != 0) & (x_dir[:-1] != 0))
-    y_changes = np.sum((y_dir[1:] != y_dir[:-1]) & (y_dir[1:] != 0) & (y_dir[:-1] != 0))
-
-    return (x_changes >= 3 or y_changes >= 3) and (
-        np.mean(np.abs(dx[dx_mask])) > 12 or np.mean(np.abs(dy[dy_mask])) > 12
-    )
-
-
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
-
-    frame = cv2.flip(frame, 1)
-    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-    face_results = face_detection.process(rgb_frame)
-    hand_results = hands.process(rgb_frame)
-
-    face_box = None
-    if face_results.detections:
-        detection = face_results.detections[0]
-        bbox = detection.location_data.relative_bounding_box
+    def draw_hud(self, frame, duration, motion, alerting):
         ih, iw, _ = frame.shape
-        x, y, w, h = int(bbox.xmin * iw), int(bbox.ymin * ih), int(bbox.width * iw), int(bbox.height * ih)
-        face_box = (x, y, w, h)
-        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, ih - 100), (iw, ih), (40, 40, 40), -1)
+        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
 
-    finger_positions = []
-    touching_face = False
+        # Colors
+        SEAFOAM = (180, 255, 180); CORAL = (128, 128, 255); WHITE = (240, 240, 240)
+        
+        # UI Text
+        cv2.putText(frame, "CONTACT:", (30, ih - 65), cv2.FONT_HERSHEY_DUPLEX, 0.5, WHITE, 1)
+        cv2.putText(frame, f"{duration:.1f}s", (30, ih - 30), cv2.FONT_HERSHEY_DUPLEX, 0.8, CORAL if duration > 3 else SEAFOAM, 2)
+        
+        status_text = "PICKING DETECTED" if motion else "IDLE"
+        cv2.putText(frame, status_text, (200, ih - 30), cv2.FONT_HERSHEY_DUPLEX, 0.8, CORAL if motion else SEAFOAM, 2)
 
-    if hand_results.multi_hand_landmarks and face_box is not None:
-        fx, fy, fw, fh = face_box
-        for hand_landmarks in hand_results.multi_hand_landmarks:
-            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
-            for tip_id in TIP_IDS:
-                tip = hand_landmarks.landmark[tip_id]
-                ih, iw, _ = frame.shape
-                tip_x, tip_y = int(tip.x * iw), int(tip.y * ih)
-                finger_positions.append((tip_x, tip_y))
+        if alerting:
+            cv2.circle(frame, (iw - 40, ih - 50), 12, CORAL, -1)
 
-                inside_face = fx <= tip_x <= fx + fw and fy <= tip_y <= fy + fh
-                if inside_face:
-                    touching_face = True
-                    cv2.circle(frame, (tip_x, tip_y), 8, (0, 0, 255), -1)
-                else:
-                    cv2.circle(frame, (tip_x, tip_y), 5, (255, 255, 0), -1)
+    def transform(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+        img = cv2.flip(img, 1)
+        h, w, _ = img.shape
+        current_time = time.time()
+        
+        # Detection
+        rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        face_res = self.mp_face.process(rgb_img)
+        hand_res = self.mp_hands.process(rgb_img)
+        
+        face_box = None
+        if face_res.detections:
+            b = face_res.detections[0].location_data.relative_bounding_box
+            face_box = (int(b.xmin * w), int(b.ymin * h), int(b.width * w), int(b.height * h))
 
-    current_time = time.time()
-    if touching_face:
-        if continuous_touch_start is None:
-            continuous_touch_start = current_time
-    else:
-        continuous_touch_start = None
+        touching = False
+        finger_pos = []
+        if hand_res.multi_hand_landmarks and face_box:
+            fx, fy, fw, fh = face_box
+            for hand in hand_res.multi_hand_landmarks:
+                for tid in self.TIP_IDS:
+                    tip = hand.landmark[tid]
+                    tx, ty = int(tip.x * w), int(tip.y * h)
+                    finger_pos.append((tx, ty))
+                    if fx <= tx <= fx+fw and fy <= ty <= fy+fh: touching = True
 
-    if finger_positions and touching_face:
-        avg_x = int(np.mean([p[0] for p in finger_positions]))
-        avg_y = int(np.mean([p[1] for p in finger_positions]))
-        finger_history.append((current_time, avg_x, avg_y))
-    else:
-        finger_history.clear()
+        # Logic
+        if touching:
+            if self.continuous_touch_start is None: self.continuous_touch_start = current_time
+            avg_x = int(np.mean([p[0] for p in finger_pos]))
+            avg_y = int(np.mean([p[1] for p in finger_pos]))
+            self.finger_history.append((current_time, avg_x, avg_y))
+        else:
+            self.continuous_touch_start = None
+            self.finger_history.clear()
 
-    recent_history = [entry for entry in finger_history if current_time - entry[0] <= 6.0]
-    active_motion = is_active_back_and_forth(recent_history)
+        motion = self.is_active_motion(self.finger_history, current_time)
+        duration = current_time - self.continuous_touch_start if self.continuous_touch_start else 0
+        
+        if duration >= 5.0 and motion:
+            self.alert_until = current_time + 3.0
 
-    touch_duration = 0.0
-    if continuous_touch_start is not None:
-        touch_duration = current_time - continuous_touch_start
+        # Rendering
+        alerting = current_time < self.alert_until
+        self.draw_hud(img, duration, motion, alerting)
+        
+        if alerting and ASSETS:
+            # Slower cycle (0.7 multiplier)
+            idx = int((current_time * 0.7) % len(ASSETS))
+            overlay = ASSETS[idx]
+            oh, ow = overlay.shape[:2]
+            # Overlay logic for web (top right)
+            x_off, y_off = w - ow - 20, 20
+            if overlay.shape[2] == 4:
+                alpha = overlay[:,:,3] / 255.0
+                for c in range(3):
+                    img[y_off:y_off+oh, x_off:x_off+ow, c] = (1.0 - alpha) * img[y_off:y_off+oh, x_off:x_off+ow, c] + alpha * overlay[:,:,c]
+        
+        return img
 
-    if touch_duration >= 3.0 and active_motion:
-        if current_time - last_alert > alert_cooldown:
-            last_alert = current_time
-            alert_until = current_time + 3.0
-            threaded_alert()
+# --- STREAMLIT PAGE CONFIG ---
+st.set_page_config(page_title="Taiyaki Guard", page_icon="🐟")
+st.title("🐟 Taiyaki Guard")
+st.markdown("### Protect your skin with computer vision.")
 
-    if current_time < alert_until and alert_images:
-        img_idx = int((current_time * 0.7) % len(alert_images))
-        frame = overlay_image(frame, alert_images[img_idx], 900, 400)
+webrtc_streamer(key="taiyaki", video_transformer_factory=TaiyakiGuardTransformer)
 
-    if face_box is not None:
-        cv2.putText(frame, f"Touch: {int(touch_duration)}s", (30, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
-        cv2.putText(frame, f"Motion: {'yes' if active_motion else 'no'}", (30, 170), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
-
-    cv2.imshow('Face Picking Detection', frame)
-
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-
-cap.release()
-cv2.destroyAllWindows()
+st.sidebar.info("This app monitors for repetitive face-touching. If detected for 5 seconds, Taiyaki will intervene!")
