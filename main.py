@@ -6,6 +6,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 from playsound import playsound
+import os
 
 # Initialize MediaPipe
 mp_face_detection = mp.solutions.face_detection
@@ -39,12 +40,38 @@ TIP_IDS = [
     mp_hands.HandLandmark.PINKY_TIP,
 ]
 
+def load_alert_images():
+    img_files = ['first.png', 'second.png', 'third.png']
+    images = []
+    for f in img_files:
+        img = cv2.imread(f, cv2.IMREAD_UNCHANGED) # IMREAD_UNCHANGED to keep alpha channel
+        if img is not None:
+            # Resize for visibility if they are very small pixel art
+            img = cv2.resize(img, (300, 300), interpolation=cv2.INTER_NEAREST)
+            images.append(img)
+    return images
+
+alert_images = load_alert_images()
+
+def overlay_image(background, overlay, x, y):
+    h, w = overlay.shape[:2]
+    if x + w > background.shape[1] or y + h > background.shape[0]:
+        return background
+    
+    # Split channels
+    if overlay.shape[2] == 4:
+        overlay_img = overlay[:, :, :3]
+        mask = overlay[:, :, 3:] / 255.0
+        background[y:y+h, x:x+w] = (1.0 - mask) * background[y:y+h, x:x+w] + mask * overlay_img
+    else:
+        background[y:y+h, x:x+w] = overlay
+    return background
 
 def play_alert():
     try:
-        playsound('alert.mov')
-    except Exception:
-        pass
+        os.system('afplay alert.mov')
+    except Exception as e:
+        print(f"Audio error: {e}")
 
 
 def threaded_alert():
@@ -145,14 +172,15 @@ while True:
     if continuous_touch_start is not None:
         touch_duration = current_time - continuous_touch_start
 
-    if touch_duration >= 5.0 and active_motion:
+    if touch_duration >= 3.0 and active_motion:
         if current_time - last_alert > alert_cooldown:
             last_alert = current_time
             alert_until = current_time + 3.0
             threaded_alert()
 
-    if current_time < alert_until:
-        draw_alert_overlay(frame, "STOP PICKING YOUR FACE!")
+    if current_time < alert_until and alert_images:
+        img_idx = int((current_time * 0.7) % len(alert_images))
+        frame = overlay_image(frame, alert_images[img_idx], 900, 400)
 
     if face_box is not None:
         cv2.putText(frame, f"Touch: {int(touch_duration)}s", (30, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
