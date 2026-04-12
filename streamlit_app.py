@@ -12,9 +12,12 @@ st.title("🛡️ Face Picking Detection AI")
 
 # Initialize MediaPipe outside the class to save resources
 mp_face_detection = mp.solutions.face_detection
-mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
 
+face_detection = mp_face_detection.FaceDetection(
+    model_selection=0, 
+    min_detection_confidence=0.5
+)
 class FacePickingProcessor(VideoProcessorBase):
     def __init__(self):
         self.face_detector = mp_face_detection.FaceDetection(min_detection_confidence=0.5)
