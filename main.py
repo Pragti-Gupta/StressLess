@@ -60,21 +60,28 @@ def draw_alert_overlay(frame, text):
 
 
 def is_active_back_and_forth(history):
-    if len(history) < 8:
+    if len(history) < 16:
         return False
 
     xs = np.array([p[1] for p in history], dtype=np.float32)
     ys = np.array([p[2] for p in history], dtype=np.float32)
 
-    if np.ptp(xs) < 20 and np.ptp(ys) < 20:
+    if np.ptp(xs) < 80 and np.ptp(ys) < 80:
         return False
 
-    x_dir = np.sign(np.diff(xs))
-    y_dir = np.sign(np.diff(ys))
+    dx = np.diff(xs)
+    dy = np.diff(ys)
+    dx_mask = np.abs(dx) > 10
+    dy_mask = np.abs(dy) > 10
+    x_dir = np.sign(dx) * dx_mask
+    y_dir = np.sign(dy) * dy_mask
+
     x_changes = np.sum((x_dir[1:] != x_dir[:-1]) & (x_dir[1:] != 0) & (x_dir[:-1] != 0))
     y_changes = np.sum((y_dir[1:] != y_dir[:-1]) & (y_dir[1:] != 0) & (y_dir[:-1] != 0))
 
-    return x_changes >= 2 or y_changes >= 2
+    return (x_changes >= 3 or y_changes >= 3) and (
+        np.mean(np.abs(dx[dx_mask])) > 12 or np.mean(np.abs(dy[dy_mask])) > 12
+    )
 
 
 while True:
