@@ -6,6 +6,8 @@ import time
 import cv2
 import mediapipe as mp
 import numpy as np
+from mediapipe.python.solutions import face_detection as mp_face_detection
+from mediapipe.python.solutions import drawing_utils as mp_drawing
 
 st.set_page_config(page_title="Skin Health Monitor", page_icon="🛡️")
 st.title("🛡️ Face Picking Detection AI")
@@ -14,10 +16,11 @@ st.title("🛡️ Face Picking Detection AI")
 mp_face_detection = mp.solutions.face_detection
 mp_drawing = mp.solutions.drawing_utils
 
-face_detection = mp_face_detection.FaceDetection(
+face_detector = mp_face_detection.FaceDetection(
     model_selection=0, 
     min_detection_confidence=0.5
 )
+
 class FacePickingProcessor(VideoProcessorBase):
     def __init__(self):
         self.face_detector = mp_face_detection.FaceDetection(min_detection_confidence=0.5)
