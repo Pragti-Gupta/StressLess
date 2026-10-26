@@ -18,6 +18,14 @@ import sys
 import platform
 import subprocess
 import ctypes
+from pathlib import Path
+
+# Locate bundled read-only resources independently of the working directory.
+RESOURCE_DIR = Path(__file__).resolve().parent
+
+def resource_path(filename):
+   return str(RESOURCE_DIR / filename)
+
 from datetime import datetime, timedelta
 from random import choice
 from tkinter import messagebox
@@ -79,12 +87,9 @@ def play_mp3(file_path):
        return
 
 
-   # Resolve relative paths against the directory where stressless.py is located
-   base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+   # Prefer bundled resources; also accept an absolute path.
    candidates = [
-       file_path,
-       os.path.join(base_dir, file_path),
-       os.path.join(os.getcwd(), file_path),
+       file_path if os.path.isabs(file_path) else resource_path(file_path),
    ]
    resolved_path = None
    for c in candidates:
@@ -94,7 +99,7 @@ def play_mp3(file_path):
 
 
    if not resolved_path:
-       print(f"Audio file not found: {file_path} (Make sure it is in {base_dir})")
+       print(f"Audio file not found: {file_path} (Resource directory: {RESOURCE_DIR})")
        return
 
 
@@ -130,8 +135,7 @@ def play_mp3(file_path):
 
 def play_alarm_sound():
    """Plays the picking alarm sound file when Stage 2 intervention triggers."""
-   base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
-   search_dirs = [base_dir, os.getcwd(), os.path.expanduser("~/Downloads"), os.path.expanduser("~/Desktop")]
+   search_dirs = [str(RESOURCE_DIR)]
 
 
    # 1. Check explicitly for the attached bubble sound and standard alarm names first
@@ -152,7 +156,7 @@ def play_alarm_sound():
 
 
    # 2. Fallback: play any .mp3 or .wav file dropped into the script folder
-   for d in [base_dir, os.getcwd()]:
+   for d in search_dirs:
        if not os.path.exists(d):
            continue
        for fname in os.listdir(d):
@@ -181,7 +185,7 @@ SUGGESTIONS = [
    "Take 3 deep, slow breaths",
    "Stretch your shoulders and hands",
 ]
-DATA_DIR = "data"
+DATA_DIR = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "StressLess", "data")
 LOG_FILE = os.path.join(DATA_DIR, "picking_log.csv")
 LABELS_FILE = os.path.join(DATA_DIR, "labels.csv")
 FOOD_LOG_FILE = os.path.join(DATA_DIR, "food_log.csv")
@@ -279,13 +283,11 @@ def mouse_callback_trends(event, x, y, flags, param):
 
 def ensure_data_dir():
    global DATA_DIR, LOG_FILE, LABELS_FILE, FOOD_LOG_FILE
-   base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
-   DATA_DIR = os.path.join(base_dir, "data")
+   DATA_DIR = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "StressLess", "data")
    LOG_FILE = os.path.join(DATA_DIR, "picking_log.csv")
    LABELS_FILE = os.path.join(DATA_DIR, "labels.csv")
    FOOD_LOG_FILE = os.path.join(DATA_DIR, "food_log.csv")
-   try: os.makedirs(DATA_DIR, exist_ok=True)
-   except Exception: pass
+   os.makedirs(DATA_DIR, exist_ok=True)
 
 
 
@@ -870,13 +872,13 @@ def run(user_id="anonymous", picker_type="skin picking"):
        return
 
 
-   img_video_on = cv2.imread("videoon.png", -1)
-   img_video_off = cv2.imread("videooff.png", -1)
-   img_tracking_on = cv2.imread("trackingon.png", -1)
-   img_tracking_off = cv2.imread("trackingoff.png", -1)
-   img_quit = cv2.imread("quit.png", -1)
-   img_taiyaki_mascot = cv2.imread("taiyaki.png", -1)
-   img_food_log = cv2.imread("foodlog.png", -1)
+   img_video_on = cv2.imread(resource_path("videoon.png"), -1)
+   img_video_off = cv2.imread(resource_path("videooff.png"), -1)
+   img_tracking_on = cv2.imread(resource_path("trackingon.png"), -1)
+   img_tracking_off = cv2.imread(resource_path("trackingoff.png"), -1)
+   img_quit = cv2.imread(resource_path("quit.png"), -1)
+   img_taiyaki_mascot = cv2.imread(resource_path("taiyaki.png"), -1)
+   img_food_log = cv2.imread(resource_path("foodlog.png"), -1)
 
 
    mp_face_mesh = mp.solutions.face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5, min_tracking_confidence=0.5)
